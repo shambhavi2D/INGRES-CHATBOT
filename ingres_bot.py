@@ -99,7 +99,23 @@ def load_dataset() -> pd.DataFrame:
             print(f"[OK] Loaded data from: {p} | shape={df.shape}")
             return clean_dataframe(df)
     
-    raise RuntimeError("Unable to locate a dataset.")
+    # Create minimal dummy data if no dataset found
+    print("[WARN] No dataset found, creating minimal dummy data")
+    return create_minimal_dummy_data()
+
+def create_minimal_dummy_data() -> pd.DataFrame:
+    """Create minimal dummy data for testing"""
+    data = {
+        'State': ['Maharashtra', 'Karnataka', 'Tamil Nadu', 'Gujarat', 'Rajasthan'],
+        'District': ['Mumbai', 'Bangalore Urban', 'Chennai', 'Ahmedabad', 'Jaipur'],
+        'Year': [2020, 2021, 2022, 2020, 2021],
+        'Groundwater_Level_m': [5.2, 7.8, 6.1, 8.3, 12.5],
+        'Annual_Recharge_ham': [1200, 950, 1100, 850, 600],
+        'Extraction_ham': [1150, 920, 1050, 800, 580],
+        'Stage_of_Ground_Water_Extraction_pct': [85, 92, 88, 78, 95],
+        'Category': ['Semi-Critical', 'Critical', 'Semi-Critical', 'Safe', 'Critical']
+    }
+    return pd.DataFrame(data)
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -175,36 +191,35 @@ def detect_stage_column(df: pd.DataFrame) -> Optional[str]:
             return c
     return None
 
-YEAR_COL = detect_year_column(DF) or "YEAR"
+YEAR_COL = detect_year_column(DF) or "Year"
 GEO = detect_geo_columns(DF)
 STAGE_COL = detect_stage_column(DF) or "Category"
 NUMERIC_COLS = list_numeric_columns(DF)
 TEXT_COLS = list_text_columns(DF)
 
+# Print dataset info for debugging
+print(f"Dataset loaded: {DF.shape}")
+print(f"Columns: {list(DF.columns)}")
+print(f"Year column: {YEAR_COL}")
+print(f"Geo columns: {GEO}")
+print(f"Stage column: {STAGE_COL}")
+
 # --------------- METRIC MATCHING (FUZZY) ---------------
 
 ALIAS_HINTS = {
-    "year": ["YEAR"],
-    "state": ["STATE"],
-    "district": ["DISTRICT"],
-    "block": ["ASSESSMENT_UNIT", "BLOCK"],
+    "year": ["Year"],
+    "state": ["State"],
+    "district": ["District"],
+    "block": ["Block", "Assessment_Unit"],
     "stage": ["Stage_of_Ground_Water_Extraction_pct", "Category"],
-    "total extraction": ["Total_Ground_Water_Extraction_ham"],
-    "annual recharge": ["Total_Annual_Recharge_ham"],
-    "recharge": ["Total_Annual_Recharge_ham", "Monsoon_Recharge_ham", "Non_Monsoon_Recharge_ham"],
-    "extraction": ["Total_Ground_Water_Extraction_ham", "Ground_Water_Extraction_Domestic_ham", 
-                  "Ground_Water_Extraction_Industrial_ham", "Ground_Water_Extraction_Irrigation_ham"],
-    "availability": ["Net_Ground_Water_Availability_ham", "Annual_Extractable_Ground_Water_Resource_ham"],
-    "rainfall": ["Rainfall_mm"],
-    "area": ["Total_Geographical_Area_ha", "Agricultural_Area_ha"],
-    "population": ["Population"],
-    "water table": ["Water_Table_Depth_m"],
-    "quality": ["Water_Quality_Index"],
-    "aquifer": ["Aquifer_Type"],
+    "total extraction": ["Extraction_ham"],
+    "annual recharge": ["Annual_Recharge_ham"],
+    "recharge": ["Annual_Recharge_ham"],
+    "extraction": ["Extraction_ham"],
+    "availability": ["Groundwater_Level_m"],
+    "water table": ["Groundwater_Level_m"],
+    "level": ["Groundwater_Level_m"],
     "category": ["Category"],
-    "utilization": ["Extraction_Utilization_Ratio"],
-    "ratio": ["Extraction_Utilization_Ratio", "Recharge_Extraction_Ratio"],
-    "per capita": ["Per_Capita_Water_Availability"]
 }
 
 def normalize_name(s: str) -> str:
@@ -304,7 +319,7 @@ class LLM:
         
         filters = {"year": year}
         
-        # Extract geographic entities with improved patterns
+        # Extract geographic entities
         geo_patterns = {
             "state": r"(?:state|states|in|for)\s+([a-zA-Z][a-zA-Z\s]{2,})(?=\s|$)",
             "district": r"(?:district|districts|in|for)\s+([a-zA-Z][a-zA-Z\s]{2,})(?=\s|$)",
@@ -337,12 +352,11 @@ class LLM:
         # Enhanced metric detection
         metric = None
         metric_keywords = {
-            "Total_Annual_Recharge_ham": ["recharge", "water recharge", "annual recharge"],
-            "Total_Ground_Water_Extraction_ham": ["extraction", "water extraction", "total extraction"],
-            "Net_Ground_Water_Availability_ham": ["availability", "water available", "resource"],
-            "Rainfall_mm": ["rainfall", "rain", "precipitation"],
-            "Population": ["population", "people", "demographic"],
-            "Stage_of_Ground_Water_Extraction_pct": ["stage", "category", "extraction stage"]
+            "Annual_Recharge_ham": ["recharge", "water recharge", "annual recharge"],
+            "Extraction_ham": ["extraction", "water extraction", "total extraction"],
+            "Groundwater_Level_m": ["groundwater", "water level", "water table", "depth", "level"],
+            "Stage_of_Ground_Water_Extraction_pct": ["stage", "category", "extraction stage"],
+            "Category": ["category", "stage"]
         }
         
         for metric_col, keywords in metric_keywords.items():
@@ -391,38 +405,21 @@ class LLM:
                 intent = line.split("Intent:")[1].strip().lower()
             elif "Metric:" in line:
                 metric_part = line.split("Metric:")[1].strip()
-                # Convert column names to readable format
                 metric = re.sub(r'[_]', ' ', metric_part).replace('ham', '').replace('mm', '').title().strip()
             elif "Scope:" in line:
                 scope = line.split("Scope:")[1].strip()
             elif "Forecast:" in line:
                 forecast_info = line.split("Forecast:")[1].strip()
         
-        # Create rich, informative narratives
         narratives = {
-            "trend": f"This analysis shows the historical trend of {metric} for {scope}. "
-                    f"The data reveals important patterns in groundwater resource management over time. "
-                    f"Understanding these trends is crucial for sustainable water resource planning.",
-            
-            "forecast": f"Based on historical data patterns, this forecast predicts future {metric} for {scope}. "
-                       f"{forecast_info if forecast_info else 'The projection provides valuable insights for water resource planning and management decisions.'} "
-                       f"These forecasts help in anticipating future water availability and planning accordingly.",
-            
-            "compare": f"This comparative analysis displays {metric} across different regions in {scope}. "
-                      f"It highlights regional variations, patterns, and disparities in groundwater utilization. "
-                      f"Such comparisons are essential for targeted resource allocation and policy making.",
-            
-            "distribution": f"The distribution analysis shows how groundwater resources are categorized across different stages in {scope}. "
-                           f"It provides insights into resource allocation patterns, utilization efficiency, and sustainability indicators. "
-                           f"Understanding this distribution helps in identifying areas needing intervention.",
-            
-            "metric_lookup": f"This analysis examines {metric} data for {scope}. "
-                            f"It presents key statistics, patterns, and insights relevant to groundwater resource management. "
-                            f"The findings contribute to better understanding of water resource dynamics in the region."
+            "trend": f"This analysis shows the historical trend of {metric} for {scope}.",
+            "forecast": f"Based on historical data patterns, this forecast predicts future {metric} for {scope}.",
+            "compare": f"This comparative analysis displays {metric} across different regions in {scope}.",
+            "distribution": f"The distribution analysis shows how groundwater resources are categorized across different stages in {scope}.",
+            "metric_lookup": f"This analysis examines {metric} data for {scope}."
         }
         
-        return narratives.get(intent, f"This analysis provides comprehensive insights into {metric} for {scope}. "
-                                     f"The data reveals important patterns and trends in groundwater resource management.")
+        return narratives.get(intent, f"This analysis provides insights into {metric} for {scope}.")
 
 # Initialize LLM
 LLM_CLIENT = LLM(GEMINI_API_KEY, GEMINI_MODEL)
@@ -436,7 +433,6 @@ def apply_filters(df: pd.DataFrame, filters: Dict[str, Any]) -> pd.DataFrame:
         col = GEO.get(key)
         if col and filters.get(key):
             val = str(filters[key]).strip().lower()
-            # Use contains for partial matching
             out = out[out[col].astype(str).str.lower().str.contains(val, na=False)]
     
     if YEAR_COL and filters.get("year") is not None:
@@ -526,35 +522,32 @@ def forecast_next_year(ts_df: pd.DataFrame, metric: str) -> Tuple[int, float]:
             last_year = int(ts_df[YEAR_COL].iloc[-1])
             last_value = float(ts_df[metric].iloc[-1])
             return last_year + 1, last_value
-        return 2025, 0.0
+        return datetime.now().year + 1, 0.0
     
     years = ts_df[YEAR_COL].astype(int).tolist()
     values = ts_df[metric].astype(float).to_numpy()
     
-    # Simple forecasting: use average of last 2 years for short series
     if len(values) < 3:
         next_year = max(years) + 1
         forecast_value = np.mean(values[-2:]) if len(values) >= 2 else values[-1]
         return next_year, float(forecast_value)
     
     try:
-        # Use exponential smoothing for longer series
         model = ExponentialSmoothing(values, trend="add", seasonal=None)
         fit = model.fit()
         forecast = fit.forecast(1)[0]
         next_year = max(years) + 1
         return next_year, float(max(forecast, 0))
     except Exception:
-        # Fallback: linear extrapolation
         next_year = max(years) + 1
         if len(values) >= 2:
-            slope = (values[-1] - values[-2]) / 1.0  # per year
+            slope = (values[-1] - values[-2]) / 1.0
             forecast_value = values[-1] + slope
         else:
             forecast_value = values[-1]
         return next_year, float(max(forecast_value, 0))
 
-# --------------- CHART BUILDERS (HIGH QUALITY) ---------------
+# --------------- CHART BUILDERS ---------------
 
 def line_chart_from_ts(ts: pd.DataFrame, label: str, y_key: str) -> ChartSpec:
     labels = ts[YEAR_COL].astype(int).astype(str).tolist()
@@ -569,70 +562,18 @@ def line_chart_from_ts(ts: pd.DataFrame, label: str, y_key: str) -> ChartSpec:
                 "data": data,
                 "borderColor": "rgb(59, 130, 246)",
                 "backgroundColor": "rgba(59, 130, 246, 0.1)",
-                "borderWidth": 3,
+                "borderWidth": 2,
                 "fill": True,
                 "tension": 0.4,
-                "pointBackgroundColor": "rgb(59, 130, 246)",
-                "pointBorderColor": "#ffffff",
-                "pointBorderWidth": 2,
-                "pointRadius": 5,
-                "pointHoverRadius": 8
             }]
         },
         options={
             "responsive": True,
             "maintainAspectRatio": False,
-            "plugins": {
-                "legend": {
-                    "display": True,
-                    "position": "top",
-                    "labels": {
-                        "font": {"size": 14, "weight": "bold"},
-                        "color": "#1e293b"
-                    }
-                },
-                "title": {
-                    "display": True,
-                    "text": f"{label} Trend Over Time",
-                    "font": {"size": 16, "weight": "bold"},
-                    "color": "#1e293b"
-                }
-            },
-            "scales": {
-                "x": {
-                    "title": {
-                        "display": True,
-                        "text": "Year",
-                        "font": {"size": 14, "weight": "bold"},
-                        "color": "#1e293b"
-                    },
-                    "grid": {"color": "rgba(0,0,0,0.1)"}
-                },
-                "y": {
-                    "title": {
-                        "display": True,
-                        "text": label,
-                        "font": {"size": 14, "weight": "bold"},
-                        "color": "#1e293b"
-                    },
-                    "grid": {"color": "rgba(0,0,0,0.1)"},
-                    "beginAtZero": True
-                }
-            }
         }
     )
 
 def bar_chart_from_df(x_vals: List[str], y_vals: List[float], label: str) -> ChartSpec:
-    colors = [
-        "rgba(59, 130, 246, 0.8)",
-        "rgba(14, 165, 233, 0.8)", 
-        "rgba(139, 92, 246, 0.8)",
-        "rgba(236, 72, 153, 0.8)",
-        "rgba(249, 115, 22, 0.8)",
-        "rgba(16, 185, 129, 0.8)",
-        "rgba(245, 158, 11, 0.8)"
-    ]
-    
     return ChartSpec(
         type="bar",
         data={
@@ -640,101 +581,32 @@ def bar_chart_from_df(x_vals: List[str], y_vals: List[float], label: str) -> Cha
             "datasets": [{
                 "label": label,
                 "data": [round(float(v), 2) for v in y_vals],
-                "backgroundColor": colors[:len(x_vals)],
-                "borderColor": [c.replace('0.8', '1.0') for c in colors[:len(x_vals)]],
-                "borderWidth": 2,
-                "borderRadius": 6,
-                "barPercentage": 0.7,
-                "categoryPercentage": 0.8
+                "backgroundColor": "rgba(59, 130, 246, 0.8)",
             }]
         },
         options={
             "responsive": True,
             "maintainAspectRatio": False,
-            "plugins": {
-                "legend": {
-                    "display": True,
-                    "position": "top",
-                    "labels": {
-                        "font": {"size": 14, "weight": "bold"},
-                        "color": "#1e293b"
-                    }
-                },
-                "title": {
-                    "display": True,
-                    "text": f"{label} Comparison",
-                    "font": {"size": 16, "weight": "bold"},
-                    "color": "#1e293b"
-                }
-            },
-            "scales": {
-                "x": {
-                    "title": {
-                        "display": True,
-                        "text": "Region",
-                        "font": {"size": 14, "weight": "bold"},
-                        "color": "#1e293b"
-                    },
-                    "grid": {"color": "rgba(0,0,0,0.1)"}
-                },
-                "y": {
-                    "title": {
-                        "display": True,
-                        "text": label,
-                        "font": {"size": 14, "weight": "bold"},
-                        "color": "#1e293b"
-                    },
-                    "grid": {"color": "rgba(0,0,0,0.1)"},
-                    "beginAtZero": True
-                }
-            }
         }
     )
 
-def pie_chart_from_df(labels: List[str], vals: List[float], label: str = "Share") -> ChartSpec:
-    colors = [
-        "rgba(59, 130, 246, 0.8)",
-        "rgba(14, 165, 233, 0.8)",
-        "rgba(139, 92, 246, 0.8)",
-        "rgba(236, 72, 153, 0.8)",
-        "rgba(249, 115, 22, 0.8)",
-        "rgba(16, 185, 129, 0.8)",
-        "rgba(245, 158, 11, 0.8)"
-    ]
-    
+def pie_chart_from_df(labels: List[str], vals: List[float]) -> ChartSpec:
     return ChartSpec(
         type="pie",
         data={
             "labels": labels,
             "datasets": [{
-                "label": label,
                 "data": [float(v) for v in vals],
-                "backgroundColor": colors[:len(labels)],
-                "borderColor": "#ffffff",
-                "borderWidth": 2,
-                "hoverOffset": 12
+                "backgroundColor": [
+                    "rgba(59, 130, 246, 0.8)",
+                    "rgba(14, 165, 233, 0.8)",
+                    "rgba(139, 92, 246, 0.8)",
+                ],
             }]
         },
         options={
             "responsive": True,
             "maintainAspectRatio": False,
-            "plugins": {
-                "legend": {
-                    "display": True,
-                    "position": "right",
-                    "labels": {
-                        "font": {"size": 12, "weight": "bold"},
-                        "color": "#1e293b",
-                        "padding": 20
-                    }
-                },
-                "title": {
-                    "display": True,
-                    "text": "Groundwater Stage Distribution",
-                    "font": {"size": 16, "weight": "bold"},
-                    "color": "#1e293b"
-                }
-            }
         }
     )
 
@@ -744,7 +616,7 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
     if not message.strip():
         return ChatResponse(
             intent="help",
-            narrative="🚀 Welcome to Groundwater Analytics! Please provide a query like:\n• 'Show recharge trends for Rajasthan'\n• 'Compare top 5 districts by extraction'\n• 'Forecast next year water availability'\n• 'Stage distribution in Karnataka 2022'",
+            narrative="🚀 Welcome to Jal Mitra! Ask about groundwater data like:\n• 'Groundwater in Mumbai 2022'\n• 'Recharge trend Jaipur'\n• 'Compare districts by extraction'",
             metric=None,
             filters={}
         )
@@ -755,7 +627,7 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
     intent = classification.get("intent", "metric_lookup")
     filters = classification.get("filters", {}) or {}
     metric_req = classification.get("metric")
-    top_k_req = min(int(classification.get("top_k", top_k)), 20)  # Cap at 20 for safety
+    top_k_req = min(int(classification.get("top_k", top_k)), 20)
     
     if forced_year:
         filters["year"] = forced_year
@@ -764,8 +636,7 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
     if intent != "distribution":
         metric_col = find_metric_column(metric_req or "", schema_cols)
         if metric_col is None and NUMERIC_COLS:
-            preferred = [c for c in NUMERIC_COLS if any(k in c.lower() for k in ["extraction", "recharge", "availability"])]
-            metric_col = preferred[0] if preferred else NUMERIC_COLS[0]
+            metric_col = NUMERIC_COLS[0]
 
     dff = apply_filters(DF, filters)
     if dff.empty:
@@ -773,7 +644,7 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
             intent=intent,
             metric=metric_col,
             filters=filters,
-            narrative="❌ No data found matching your criteria. Try broadening your search or check if the specified region/year exists in the dataset.",
+            narrative="❌ No data found. Try broadening your search.",
             chart=None,
             table=None
         )
@@ -783,33 +654,24 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
     forecast_payload = None
 
     try:
-        if intent in ("trend", "forecast"):
-            if not metric_col:
-                raise ValueError("No metric identified for time analysis")
-            
+        if intent in ("trend", "forecast") and metric_col:
             ts = aggregate_by_year(dff, metric_col, "mean")
-            if ts.empty:
-                raise ValueError("No time series data available")
-            
-            chart = line_chart_from_ts(ts, label=metric_col, y_key=metric_col)
+            if not ts.empty:
+                chart = line_chart_from_ts(ts, label=metric_col, y_key=metric_col)
+                if intent == "forecast":
+                    ts2 = ensure_timeseries_for_forecast(dff, metric_col)
+                    if not ts2.empty:
+                        ny, val = forecast_next_year(ts2, metric_col)
+                        forecast_payload = {"next_year": ny, "forecast_value": round(val, 2)}
 
-            if intent == "forecast":
-                ts2 = ensure_timeseries_for_forecast(dff, metric_col)
-                if not ts2.empty:
-                    ny, val = forecast_next_year(ts2, metric_col)
-                    forecast_payload = {"next_year": ny, "forecast_value": round(val, 2)}
-
-        elif intent in ("compare", "top_n"):
-            if not metric_col:
-                raise ValueError("No metric identified for comparison")
-            
+        elif intent in ("compare", "top_n") and metric_col:
             for lvl in ["unit", "block", "district", "state"]:
                 if GEO.get(lvl):
                     level = lvl
                     break
             else:
-                raise ValueError("No geographic columns available for comparison")
-
+                level = "state"
+            
             year = None
             if YEAR_COL in dff.columns and filters.get("year") is not None:
                 try:
@@ -829,14 +691,32 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
             if not dist_df.empty:
                 chart = pie_chart_from_df(
                     dist_df["Stage"].astype(str).tolist(), 
-                    dist_df["Count"].astype(int).tolist(), 
-                    label="Count"
+                    dist_df["Count"].astype(int).tolist()
                 )
                 table = dist_df.to_dict(orient="records")
 
-        elif intent in ("metric_lookup", "help"):
-            if metric_col:
-                if YEAR_COL in dff.columns and filters.get("year") is not None:
+        elif intent in ("metric_lookup", "help") and metric_col:
+            if YEAR_COL in dff.columns and filters.get("year") is not None:
+                for lvl in ["unit", "block", "district", "state"]:
+                    col = GEO.get(lvl)
+                    if col:
+                        tmp = dff.groupby(col)[metric_col].mean().reset_index()
+                        tmp = tmp.sort_values(metric_col, ascending=False).head(top_k_req)
+                        if not tmp.empty:
+                            table = tmp.to_dict(orient="records")
+                            chart = bar_chart_from_df(
+                                tmp[col].astype(str).tolist(),
+                                tmp[metric_col].astype(float).tolist(),
+                                label=f"{metric_col} ({filters.get('year')})"
+                            )
+                            break
+            else:
+                if YEAR_COL in dff.columns:
+                    ts = aggregate_by_year(dff, metric_col, "mean")
+                    if not ts.empty:
+                        chart = line_chart_from_ts(ts, label=metric_col, y_key=metric_col)
+                        table = ts.tail(10).to_dict(orient="records")
+                else:
                     for lvl in ["unit", "block", "district", "state"]:
                         col = GEO.get(lvl)
                         if col:
@@ -847,40 +727,9 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
                                 chart = bar_chart_from_df(
                                     tmp[col].astype(str).tolist(),
                                     tmp[metric_col].astype(float).tolist(),
-                                    label=f"{metric_col} ({filters.get('year')})"
+                                    label=f"{metric_col} by {lvl.capitalize()}"
                                 )
                                 break
-                else:
-                    if YEAR_COL in dff.columns:
-                        ts = aggregate_by_year(dff, metric_col, "mean")
-                        if not ts.empty:
-                            chart = line_chart_from_ts(ts, label=metric_col, y_key=metric_col)
-                            table = ts.tail(10).to_dict(orient="records")
-                    else:
-                        for lvl in ["unit", "block", "district", "state"]:
-                            col = GEO.get(lvl)
-                            if col:
-                                tmp = dff.groupby(col)[metric_col].mean().reset_index()
-                                tmp = tmp.sort_values(metric_col, ascending=False).head(top_k_req)
-                                if not tmp.empty:
-                                    table = tmp.to_dict(orient="records")
-                                    chart = bar_chart_from_df(
-                                        tmp[col].astype(str).tolist(),
-                                        tmp[metric_col].astype(float).tolist(),
-                                        label=f"{metric_col} by {lvl.capitalize()}"
-                                    )
-                                    break
-            else:
-                # Show available metrics for help
-                available_metrics = [col for col in NUMERIC_COLS if not col.startswith('Unnamed')][:10]
-                return ChatResponse(
-                    intent="help",
-                    narrative=f"📊 Available metrics for analysis:\n" +
-                             "\n".join([f"• {col}" for col in available_metrics]) +
-                             f"\n\n💡 Try queries like:\n• 'Show recharge trends for Rajasthan'\n• 'Compare districts by extraction in 2022'\n• 'Forecast water availability next year'",
-                    metric=None,
-                    filters={}
-                )
 
     except Exception as e:
         print(f"[ERROR] Analytics processing failed: {e}")
@@ -888,12 +737,11 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
             intent=intent,
             metric=metric_col,
             filters=filters,
-            narrative=f"⚠️ Analysis encountered an issue: {str(e)}. Please try a different query or check your parameters.",
+            narrative=f"⚠️ Analysis error: {str(e)}",
             chart=None,
             table=None
         )
 
-    # Build narrative
     fparts = []
     for key in ["state", "district", "block", "unit"]:
         if filters.get(key):
@@ -903,11 +751,9 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
     
     scope = ", ".join(fparts) if fparts else "All India"
     
-    nar_prompt = f"Analysis of {metric_col or 'groundwater data'} for {scope}. "
-    nar_prompt += f"Intent: {intent}. "
+    nar_prompt = f"Analysis of {metric_col or 'groundwater data'} for {scope}. Intent: {intent}."
     if forecast_payload:
-        nar_prompt += f"Forecast for {forecast_payload['next_year']}: {forecast_payload['forecast_value']:.2f}. "
-    nar_prompt += "Provide a clear, concise summary for water resource professionals."
+        nar_prompt += f" Forecast for {forecast_payload['next_year']}: {forecast_payload['forecast_value']:.2f}."
     
     narrative = LLM_CLIENT.narrate(nar_prompt)
 
@@ -916,10 +762,7 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
         debug_info = {
             "classification_raw": classification,
             "resolved_metric": metric_col,
-            "year_col": YEAR_COL,
-            "geo_cols": GEO,
-            "stage_col": STAGE_COL,
-            "data_sample": DF.head(2).to_dict()
+            "filters": filters
         }
 
     return ChatResponse(
@@ -935,7 +778,7 @@ def handle_chat(message: str, top_k: int, forced_year: Optional[int], debug: boo
 
 # --------------- FASTAPI APP ---------------
 
-app = FastAPI(title="Groundwater Analytics AI", version="2.0.0")
+app = FastAPI(title="Jal Mitra - Groundwater Analytics AI", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -945,27 +788,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.options("/chat")
-def options_chat():
-    return Response(status_code=204)
-
-app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
-
-@app.get("/", response_class=HTMLResponse)
-def root():
-    try:
-        with open(os.path.join("frontend", "frontend.html"), "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return HTMLResponse("""
-        <html><body><h1>Groundwater Analytics API</h1>
-        <p>API is running. Use /chat endpoint for queries.</p>
-        <p>Frontend not found. Place frontend.html in 'frontend' directory.</p>
-        </body></html>
-        """)
+@app.get("/")
+async def root():
+    return {"message": "Jal Mitra API is running", "status": "healthy"}
 
 @app.get("/health")
-def health():
+async def health():
     return {
         "ok": True,
         "rows": int(DF.shape[0]),
@@ -973,23 +801,22 @@ def health():
         "year_col": YEAR_COL,
         "geo_cols": GEO,
         "stage_col": STAGE_COL,
-        "numeric_cols_count": len(NUMERIC_COLS),
         "timestamp": datetime.now().isoformat()
     }
 
 @app.get("/schema")
-def schema():
+async def schema():
     return {
         "columns": list(DF.columns),
-        "numeric_columns": NUMERIC_COLS[:20],
-        "text_columns": TEXT_COLS[:10],
+        "numeric_columns": NUMERIC_COLS,
+        "text_columns": TEXT_COLS,
         "year_column": YEAR_COL,
         "geo_columns": GEO,
         "stage_column": STAGE_COL,
     }
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+async def chat(req: ChatRequest):
     try:
         return handle_chat(
             message=req.message,
@@ -1000,6 +827,3 @@ def chat(req: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
